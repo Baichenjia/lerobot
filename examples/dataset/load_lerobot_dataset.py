@@ -128,7 +128,7 @@ delta_timestamps = {
 # timestamp, you still get a valid timestamp.
 
 dataset = LeRobotDataset(repo_id, delta_timestamps=delta_timestamps)
-print(f"\n{dataset[0][camera_key].shape=}")  # (4, c, h, w)
+print(f"\n{dataset[0][camera_key].shape=}")  # (4, c, h, w)  这里的4是由DeltaTimestamps中设置的
 print(f"{dataset[0]['observation.state'].shape=}")  # (6, c)
 print(f"{dataset[0]['action'].shape=}\n")  # (64, c)
 

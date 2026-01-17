@@ -53,11 +53,11 @@ from lerobot.datasets.utils import (
     get_parquet_num_frames,
     get_safe_version,
     get_video_size_in_mb,
-    hf_transform_to_torch,
+    hf_transform_to_torch,  # Convert a batch from a Hugging Face dataset to torch tensors.
     is_valid_version,
     load_episodes,
     load_info,
-    load_nested_dataset,
+    load_nested_dataset,   # 读取所有的 parquet 文件
     load_stats,
     load_tasks,
     to_parquet_with_hf_images,
@@ -93,7 +93,8 @@ class LeRobotDatasetMetadata:
     ):
         self.repo_id = repo_id
         self.revision = revision if revision else CODEBASE_VERSION
-        self.root = Path(root) if root is not None else HF_LEROBOT_HOME / repo_id
+        print("HF_LEROBOT_HOME:", HF_LEROBOT_HOME)
+        self.root = Path(root) if root is not None else HF_LEROBOT_HOME / repo_id  # e.g., PosixPath('/home/gyh/.cache/huggingface/lerobot/lerobot/pusht')
 
         try:
             if force_cache_sync:
@@ -112,7 +113,7 @@ class LeRobotDatasetMetadata:
         check_version_compatibility(self.repo_id, self._version, CODEBASE_VERSION)
         self.tasks = load_tasks(self.root)
         self.episodes = load_episodes(self.root)
-        self.stats = load_stats(self.root)
+        self.stats = load_stats(self.root)      # 所有feature的 max, min, std, count 这些内容
 
     def pull_from_repo(
         self,
@@ -385,7 +386,7 @@ class LeRobotDatasetMetadata:
 
         Args:
             chunks_size: Maximum number of files per chunk directory. If None, keeps current value.
-            data_files_size_in_mb: Maximum size for data parquet files in MB. If None, keeps current value.
+            data_files_size_in_mb: Maximum size for dasta parquet files in MB. If None, keeps current value.
             video_files_size_in_mb: Maximum size for video files in MB. If None, keeps current value.
         """
         if chunks_size is not None:
@@ -591,11 +592,11 @@ class LeRobotDataset(torch.utils.data.Dataset):
         self.repo_id = repo_id
         self.root = Path(root) if root else HF_LEROBOT_HOME / repo_id
         self.image_transforms = image_transforms
-        self.delta_timestamps = delta_timestamps
-        self.episodes = episodes
-        self.tolerance_s = tolerance_s
-        self.revision = revision if revision else CODEBASE_VERSION
-        self.video_backend = video_backend if video_backend else get_safe_default_codec()
+        self.delta_timestamps = delta_timestamps    # 定义了观测和action chunks的时间间隔
+        self.episodes = episodes                    # None
+        self.tolerance_s = tolerance_s              # e.g., 0.0001
+        self.revision = revision if revision else CODEBASE_VERSION  # e.g., v3.0
+        self.video_backend = video_backend if video_backend else get_safe_default_codec()  # 'torchcodec'
         self.delta_indices = None
         self.batch_encoding_size = batch_encoding_size
         self.episodes_since_last_encoding = 0
@@ -729,8 +730,8 @@ class LeRobotDataset(torch.utils.data.Dataset):
     def load_hf_dataset(self) -> datasets.Dataset:
         """hf_dataset contains all the observations, states, actions, rewards, etc."""
         features = get_hf_features_from_features(self.features)
-        hf_dataset = load_nested_dataset(self.root / "data", features=features)
-        hf_dataset.set_transform(hf_transform_to_torch)
+        hf_dataset = load_nested_dataset(self.root / "data", features=features)     # Load all the parquet files
+        hf_dataset.set_transform(hf_transform_to_torch)    # Convert a batch from a Hugging Face dataset to torch tensors.
         return hf_dataset
 
     def _check_cached_episodes_sufficient(self) -> bool:

@@ -43,10 +43,12 @@ def main():
     # creating the policy:
     #   - input/output shapes: to properly size the policy
     #   - dataset stats: for normalization and denormalization of input/outputs
-    dataset_metadata = LeRobotDatasetMetadata("lerobot/pusht")
+    dataset_metadata = LeRobotDatasetMetadata("lerobot/pusht")  # 调用 lerobot_dataset.py 中的 LeRobotDatasetMetadata 类
     features = dataset_to_policy_features(dataset_metadata.features)
-    output_features = {key: ft for key, ft in features.items() if ft.type is FeatureType.ACTION}
-    input_features = {key: ft for key, ft in features.items() if key not in output_features}
+    # 举个例子：{'observation.image': PolicyFeature(type=<FeatureType.VISUAL: 'VISUAL'>, shape=(3, 96, 96)), 'observation.state': PolicyFeature(type=<FeatureType.STATE: 'STATE'>, shape=(2,)), 'action': PolicyFeature(type=<FeatureType.ACTION: 'ACTION'>, shape=(2,))}
+    output_features = {key: ft for key, ft in features.items() if ft.type is FeatureType.ACTION}   # {'action': PolicyFeature(type=<FeatureType.ACTION: 'ACTION'>, shape=(2,))}
+    input_features = {key: ft for key, ft in features.items() if key not in output_features}  
+    # {'observation.image': PolicyFeature(type=<FeatureType.VISUAL: 'VISUAL'>, shape=(3, 96, 96)), 'observation.state': PolicyFeature(type=<FeatureType.STATE: 'STATE'>, shape=(2,))}
 
     # Policies are initialized with a configuration class, in this case `DiffusionConfig`. For this example,
     # we'll just use the defaults and so no arguments other than input/output features need to be passed.

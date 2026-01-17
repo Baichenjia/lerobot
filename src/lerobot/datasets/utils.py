@@ -136,7 +136,7 @@ def load_nested_dataset(pq_dir: Path, features: datasets.Features | None = None)
 
     # TODO(rcadene): set num_proc to accelerate conversion to pyarrow
     datasets = [Dataset.from_parquet(str(path), features=features) for path in paths]
-    return concatenate_datasets(datasets)
+    return concatenate_datasets(datasets)  # 把目录下所有的parquet文件连接成一个大的 Dataset 对象
 
 
 def get_parquet_num_frames(parquet_path: str | Path) -> int:

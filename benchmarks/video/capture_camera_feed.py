@@ -29,6 +29,14 @@ RERUN_MEMORY_LIMIT = os.getenv("LEROBOT_RERUN_MEMORY_LIMIT", "5%")
 
 
 def display_and_save_video_stream(output_dir: Path, fps: int, width: int, height: int, duration: int):
+    """Capture video feed from a camera as raw images.
+        1. 初始化Rerun可视化工具并创建输出目录 按年月日/时分秒组织）
+        2. 打开默认摄像头并设置参数   FPS、分辨率
+        3. 在指定持续时间内循环捕获帧图像
+        4. 将每帧同时记录到Rerun可视化器和保存为PNG文件
+        5. 释放摄像头资源
+        简而言之：实时捕获摄像头视频流并保存为图片序列，同时支持可视化显示。"""
+    
     rr.init("lerobot_capture_camera_feed")
     rr.spawn(memory_limit=RERUN_MEMORY_LIMIT)
 
@@ -45,7 +53,7 @@ def display_and_save_video_stream(output_dir: Path, fps: int, width: int, height
 
     cap.set(cv2.CAP_PROP_FPS, fps)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)      # 摄像头的默认设置，根据连接的摄像头读取
 
     frame_index = 0
     start_time = time.time()

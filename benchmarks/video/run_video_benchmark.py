@@ -172,6 +172,13 @@ def benchmark_decoding(
     num_workers: int = 4,
     save_frames: bool = False,
 ) -> dict:
+    """视频解码性能基准测试函数，主要功能包括：
+        1. 并行处理: 使用多线程执行多个样本的解码测试，加速基准测试过程
+        2. 视频解码对比: 比较从视频文件解码帧与原始图像帧的性能和质量
+        3. 性能指标测量: 记录视频加载时间和图像加载时间
+        4. 质量评估: 计算MSE、PSNR、SSIM等图像质量指标
+        5. 结果统计: 返回平均加载时间、时间比率及质量评估结果
+    """
     def process_sample(sample: int):
         time_benchmark = TimeBenchmark()
         timestamps = sample_timestamps(timestamps_mode, ep_num_images, fps)
