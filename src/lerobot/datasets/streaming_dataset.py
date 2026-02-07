@@ -196,6 +196,7 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
 
         buffer_indices_generator = self._iter_random_indices(rng, self.buffer_size)
 
+        # 将数据集分成多个分片，每次随机选择一个分片进行读取. 避免顺序读取，提供一定的随机性
         idx_to_backtrack_dataset = {
             idx: self._make_backtrackable_dataset(safe_shard(self.hf_dataset, idx, self.num_shards))
             for idx in range(self.num_shards)
@@ -209,7 +210,9 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         while available_shards := list(idx_to_backtrack_dataset.keys()):
             shard_key = next(self._infinite_generator_over_elements(rng, available_shards))
             backtrack_dataset = idx_to_backtrack_dataset[shard_key]  # selects which shard to iterate on
-
+            # 维护一个固定大小的缓冲区(buffer_size 默认1000)
+            # 当缓冲区满时，随机返回缓冲区中的元素，替换为新的元素
+            # 这提供了随机性的同时保证了内存使用量可控
             try:
                 for frame in self.make_frame(backtrack_dataset):
                     if len(frames_buffer) == self.buffer_size:

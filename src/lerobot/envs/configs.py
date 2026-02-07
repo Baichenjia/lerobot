@@ -296,3 +296,14 @@ class LiberoEnv(EnvConfig):
             "obs_type": self.obs_type,
             "render_mode": self.render_mode,
         }
+    
+class PackedLeRobotDataset(LeRobotDataset):
+    def __init__(self, *args, packing_enabled=False, max_packed_length=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.packing_enabled = packing_enabled
+        self.max_packed_length = max_packed_length
+        
+    def pack_episodes(self, episodes, max_length):
+        """将多个episode打包成一个序列"""
+        packed_items = []
+        current_pack = []

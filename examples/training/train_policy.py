@@ -53,12 +53,18 @@ def main():
     # Policies are initialized with a configuration class, in this case `DiffusionConfig`. For this example,
     # we'll just use the defaults and so no arguments other than input/output features need to be passed.
     cfg = DiffusionConfig(input_features=input_features, output_features=output_features)
+    # e.g., Libero中 input_features={'observation.images.image': PolicyFeature(type=<FeatureType.VISUAL: 'VISUAL'>, shape=(3, 256, 256)),
+    #     'observation.images.image2': PolicyFeature(type=<FeatureType.VISUAL: 'VISUAL'>, shape=(3, 256, 256)),
+    #     'observation.state': PolicyFeature(type=<FeatureType.STATE: 'STATE'>, shape=(8,))}
+    # output_features={'action': PolicyFeature(type=<FeatureType.ACTION: 'ACTION'>, shape=(7,))}
 
     # We can now instantiate our policy with this config and the dataset stats.
     policy = DiffusionPolicy(cfg)
     policy.train()
     policy.to(device)
+    # 处理的核心
     preprocessor, postprocessor = make_pre_post_processors(cfg, dataset_stats=dataset_metadata.stats)
+
 
     # Another policy-dataset interaction is with the delta_timestamps. Each policy expects a given number frames
     # which can differ for inputs, outputs and rewards (if there are some).

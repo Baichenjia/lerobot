@@ -397,16 +397,22 @@ class OpenCVCamera(Camera):
                 logger.warning(f"Error reading frame in background thread for {self}: {e}")
 
     def _start_read_thread(self) -> None:
-        """Starts or restarts the background read thread if it's not running."""
+        """启动或重启后台读取线程（如果它还没有运行）。"""
+        # 检查当前线程是否还在运行，如果是，则等待它结束
         if self.thread is not None and self.thread.is_alive():
-            self.thread.join(timeout=0.1)
+            self.thread.join(timeout=0.1)  # 最多等待0.1秒让线程结束
+        
+        # 如果停止事件存在，则设置停止标志
         if self.stop_event is not None:
             self.stop_event.set()
 
+        # 创建新的停止事件
         self.stop_event = Event()
+        
+        # 创建并启动新的后台读取线程
         self.thread = Thread(target=self._read_loop, args=(), name=f"{self}_read_loop")
-        self.thread.daemon = True
-        self.thread.start()
+        self.thread.daemon = True  # 设置为守护线程（主线程退出时自动结束）
+        self.thread.start()  # 启动线程
 
     def _stop_read_thread(self) -> None:
         """Signals the background read thread to stop and waits for it to join."""
@@ -421,31 +427,25 @@ class OpenCVCamera(Camera):
 
     def async_read(self, timeout_ms: float = 200) -> np.ndarray:
         """
-        Reads the latest available frame asynchronously.
+        异步读取最新的可用帧。
 
-        This method retrieves the most recent frame captured by the background
-        read thread. It does not block waiting for the camera hardware directly,
-        but may wait up to timeout_ms for the background thread to provide a frame.
+        此方法检索由后台读取线程捕获的最新帧。它不会阻塞等待相机硬件，
+        但可能会等待最多 timeout_ms 时间以等待后台线程提供一帧。
 
-        Args:
-            timeout_ms (float): Maximum time in milliseconds to wait for a frame
-                to become available. Defaults to 200ms (0.2 seconds).
+        参数:
+            timeout_ms (float): 等待帧可用的最大时间, 默认为200ms。
 
-        Returns:
-            np.ndarray: The latest captured frame as a NumPy array in the format
-                       (height, width, channels), processed according to configuration.
-
-        Raises:
-            DeviceNotConnectedError: If the camera is not connected.
-            TimeoutError: If no frame becomes available within the specified timeout.
-            RuntimeError: If an unexpected error occurs.
+        返回:
+            np.ndarray: 最近捕获的帧作为NumPy数组
         """
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
+        # 如果线程不存在或未运行，则启动后台读取线程
         if self.thread is None or not self.thread.is_alive():
             self._start_read_thread()
 
+        # 等待新帧事件被设置，最多等待指定的时间（转换为秒）
         if not self.new_frame_event.wait(timeout=timeout_ms / 1000.0):
             thread_alive = self.thread is not None and self.thread.is_alive()
             raise TimeoutError(
@@ -453,9 +453,10 @@ class OpenCVCamera(Camera):
                 f"Read thread alive: {thread_alive}."
             )
 
+        # 使用锁安全地访问共享资源
         with self.frame_lock:
-            frame = self.latest_frame
-            self.new_frame_event.clear()
+            frame = self.latest_frame  # 获取最新的帧
+            self.new_frame_event.clear()  # 清除事件标志，准备接收下一帧
 
         if frame is None:
             raise RuntimeError(f"Internal error: Event set but no frame available for {self}.")
