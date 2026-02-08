@@ -1,0 +1,36 @@
+Sat Feb  7 20:03:57 2026
+ERROR: mjv_updateSceneState: m->nu changed
+
+Sat Feb  7 20:11:38 2026
+ERROR: mjv_updateSceneState: m->nu changed
+
+Sat Feb  7 20:11:56 2026
+ERROR: mjv_updateSceneState: m->nu changed
+
+Sat Feb  7 20:12:26 2026
+ERROR: mjv_updateSceneState: m->nu changed
+
+Sat Feb  7 20:26:13 2026
+ERROR: mjv_updateSceneState: m->nu changed
+
+Sat Feb  7 20:29:08 2026
+ERROR: mjv_updateSceneState: m->nu changed
+
+Sat Feb  7 20:30:33 2026
+ERROR: mjv_updateSceneState: m->nu changed
+
+Sat Feb  7 20:42:02 2026
+ERROR: mjv_updateSceneState: m->nu changed
+
+Sat Feb  7 20:49:38 2026
+ERROR: mjv_updateSceneState: m->nu changed
+
+Sat Feb  7 20:58:12 2026
+ERROR: mjv_updateSceneState: m->nu changed
+
+Sat Feb  7 21:10:44 2026
+ERROR: mjv_updateSceneState: m->nu changed
+
+Sat Feb  7 21:47:24 2026
+ERROR: mjv_updateSceneState: m->nu changed
+
