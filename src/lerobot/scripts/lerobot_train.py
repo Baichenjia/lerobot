@@ -1,5 +1,59 @@
 #!/usr/bin/env python
 
+"""
+===================== 示例代码与流程说明 =====================
+
+1. 如何在代码中获得 cfg（TrainPipelineConfig 配置对象）
+-----------------------------------------------------------
+from lerobot.configs.train import TrainPipelineConfig
+from lerobot.policies.act.configuration_act import ACTConfig
+
+# dataset 字段通常可以直接用 dict 传递 repo_id
+cfg = TrainPipelineConfig(
+        policy=ACTConfig(),
+        dataset={"repo_id": "lerobot/libero"},
+)
+print(cfg)
+
+# 输出示例（部分字段）：
+# TrainPipelineConfig(
+#     policy=ACTConfig(
+#         n_obs_steps=1,
+#         horizon=16,
+#         chunk_size=16,
+#         n_action_steps=8,
+#         ...
+#     ),
+#     dataset={'repo_id': 'lerobot/libero'},
+#     ...
+# )
+实际内容:
+# TrainPipelineConfig(dataset={'repo_id': 'lerobot/libero'}, env=None, policy=ACTConfig(n_obs_steps=1, input_features={}, output_features={}, device='cuda', use_amp=False, push_to_hub=True, repo_id=None, private=None, tags=None, license=None, horizon=16, chunk_size=16, n_action_steps=8, drop_n_last_frames=7, normalization_mapping={'VISUAL': <NormalizationMode.MEAN_STD: 'MEAN_STD'>, 'STATE': <NormalizationMode.MEAN_STD: 'MEAN_STD'>, 'ACTION': <NormalizationMode.MEAN_STD: 'MEAN_STD'>}, vision_backbone='resnet18', pretrained_backbone_weights='ResNet18_Weights.IMAGENET1K_V1', replace_final_stride_with_dilation=False, pre_norm=False, dim_model=512, n_heads=8, dim_feedforward=3200, feedforward_activation='relu', n_encoder_layers=4, n_decoder_layers=1, use_vae=True, latent_dim=32, n_vae_encoder_layers=4, temporal_ensemble_coeff=None, dropout=0.1, kl_weight=10.0, optimizer_lr=1e-05, optimizer_weight_decay=0.0001, optimizer_lr_backbone=1e-05), output_dir=None, job_name=None, resume=False, seed=1000, num_workers=4, batch_size=8, steps=100000, eval_freq=20000, log_freq=200, save_checkpoint=True, save_freq=20000, use_policy_training_preset=True, optimizer=None, scheduler=None, eval=EvalConfig(n_episodes=50, batch_size=50, use_async_envs=False), wandb=WandBConfig(enable=False, disable_artifact=False, project='lerobot', entity=None, notes=None, run_id=None, mode=None))
+
+2. lerobot-train --policy act --dataset.repo_id=lerobot/libero 的调用流程
+------------------------------------------------------------------------
+- 入口：pyproject.toml 中定义 lerobot-train = lerobot.scripts.lerobot_train:main
+- main() 调用 train()，train() 被 @parser.wrap() 装饰
+- @parser.wrap() 负责解析命令行参数，自动生成 cfg（TrainPipelineConfig 实例）
+- train(cfg) 执行训练主流程：
+    1. 解析/校验配置，设置日志、随机种子、设备
+    2. 创建数据集（make_dataset(cfg)）
+    3. 创建 policy（make_policy(cfg.policy, ds_meta)）
+    4. 创建预处理/后处理器（make_pre_post_processors）
+    5. 创建优化器和调度器
+    6. 进入训练主循环，周期性保存 checkpoint、评估、日志
+    7. 训练结束后可推送模型到 Hugging Face Hub
+
+3. 相关核心文件：
+    - scripts/lerobot_train.py（本文件，主入口）
+    - configs/train.py（TrainPipelineConfig 配置定义）
+    - policies/act/configuration_act.py（ACTConfig 定义）
+    - configs/parser.py（@parser.wrap 装饰器/参数解析）
+    - datasets/factory.py（make_dataset）
+    - policies/factory.py（make_policy, make_pre_post_processors）
+==========================================================
+"""
+
 # Copyright 2024 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
