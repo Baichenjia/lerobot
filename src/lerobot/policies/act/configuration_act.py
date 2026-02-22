@@ -91,51 +91,53 @@ class ACTConfig(PreTrainedConfig):
     """
 
     # Input / output structure.
-    n_obs_steps: int = 1
-    chunk_size: int = 100
-    n_action_steps: int = 100
+
+    n_obs_steps: int = 1  # 观测步数，输入到策略的环境观测步数（当前步及之前的步数）。
+    chunk_size: int = 16  # 动作块的大小，每次预测的动作步数。默认100
+    n_action_steps: int = 16  # 每次策略调用在环境中执行的动作步数，不能大于chunk_size。默认100    
+    horizon: int = 16
+   
+    # The original implementation doesn't sample frames for the last 7 steps,
+    # which avoids excessive padding and leads to improved training results.
+    # drop_n_last_frames: int = 7  # horizon - n_action_steps - n_obs_steps + 1
 
     normalization_mapping: dict[str, NormalizationMode] = field(
         default_factory=lambda: {
-            "VISUAL": NormalizationMode.MEAN_STD,
-            "STATE": NormalizationMode.MEAN_STD,
-            "ACTION": NormalizationMode.MEAN_STD,
+            "VISUAL": NormalizationMode.MEAN_STD,  # 图像输入的归一化方式，均值-方差归一化。
+            "STATE": NormalizationMode.MEAN_STD,   # 状态输入的归一化方式，均值-方差归一化。
+            "ACTION": NormalizationMode.MEAN_STD,  # 动作输出的归一化方式，均值-方差归一化。
         }
     )
 
-    # Architecture.
-    # Vision backbone.
-    vision_backbone: str = "resnet18"
-    pretrained_backbone_weights: str | None = "ResNet18_Weights.IMAGENET1K_V1"
-    replace_final_stride_with_dilation: int = False
-    # Transformer layers.
-    pre_norm: bool = False
-    dim_model: int = 512
-    n_heads: int = 8
-    dim_feedforward: int = 3200
-    feedforward_activation: str = "relu"
-    n_encoder_layers: int = 4
-    # Note: Although the original ACT implementation has 7 for `n_decoder_layers`, there is a bug in the code
-    # that means only the first layer is used. Here we match the original implementation by setting this to 1.
-    # See this issue https://github.com/tonyzhaozh/act/issues/25#issue-2258740521.
-    n_decoder_layers: int = 1
-    # VAE.
-    use_vae: bool = True
-    latent_dim: int = 32
-    n_vae_encoder_layers: int = 4
+    # 网络结构相关参数
+    # 视觉主干网络
+    vision_backbone: str = "resnet18"  # 图像编码器主干网络名称，默认resnet18。
+    pretrained_backbone_weights: str | None = "ResNet18_Weights.IMAGENET1K_V1"  # 是否使用预训练权重。
+    replace_final_stride_with_dilation: int = False  # 是否用膨胀卷积替换ResNet最后的步幅。
+    # Transformer层参数
+    pre_norm: bool = False  # 是否在transformer块中使用pre-norm结构。
+    dim_model: int = 512  # transformer主隐藏层维度。
+    n_heads: int = 8  # 多头注意力的头数。
+    dim_feedforward: int = 3200  # 前馈层扩展后的维度。
+    feedforward_activation: str = "relu"  # 前馈层激活函数。
+    n_encoder_layers: int = 4  # transformer编码器层数。
+    n_decoder_layers: int = 1  # transformer解码器层数（原始实现有bug，这里设为1以匹配原实现）。
+    # VAE相关参数
+    use_vae: bool = True  # 是否使用变分自编码器目标。
+    latent_dim: int = 32  # VAE隐变量维度。
+    n_vae_encoder_layers: int = 4  # VAE编码器的transformer层数。
 
-    # Inference.
-    # Note: the value used in ACT when temporal ensembling is enabled is 0.01.
-    temporal_ensemble_coeff: float | None = None
+    # 推理相关
+    temporal_ensemble_coeff: float | None = None  # 时序集成的指数加权系数，None表示不使用时序集成。
 
-    # Training and loss computation.
-    dropout: float = 0.1
-    kl_weight: float = 10.0
+    # 训练与损失计算相关
+    dropout: float = 0.1  # transformer层的dropout比例。
+    kl_weight: float = 10.0  # VAE损失中KL散度的权重。
 
-    # Training preset
-    optimizer_lr: float = 1e-5
-    optimizer_weight_decay: float = 1e-4
-    optimizer_lr_backbone: float = 1e-5
+    # 训练超参数
+    optimizer_lr: float = 1e-5  # 优化器学习率。
+    optimizer_weight_decay: float = 1e-4  # 优化器权重衰减。
+    optimizer_lr_backbone: float = 1e-5  # 主干网络的学习率。
 
     def __post_init__(self):
         super().__post_init__()
@@ -179,7 +181,7 @@ class ACTConfig(PreTrainedConfig):
 
     @property
     def action_delta_indices(self) -> list:
-        return list(range(self.chunk_size))
+        return list(range(self.chunk_size))  # [0,1,2,...,99]，表示预测当前和未来chunk_size-1步的动作
 
     @property
     def reward_delta_indices(self) -> None:
