@@ -160,7 +160,7 @@ def flex_attention_forward(
     # 目的：确保每个位置只能 attend 到之前和当前位置 (causal/autoregressive)
     causal_mask = attention_mask
     if causal_mask is not None:
-        # causal_mask 输入可能是 [B, Q_LEN, KV_LEN] 或 [B, 1, Q_LEN, KV_LEN]
+        # [Gemini 修改] causal_mask 输入必须是 [B, Q_LEN, KV_LEN]
         # 取 KV 维度到 key_states.shape[2] (即 KV_LEN)
         causal_mask = causal_mask[:, None, :, : key_states.shape[2]]
         # 处理后 causal_mask: [B, 1, Q_LEN, KV_LEN]
@@ -199,10 +199,13 @@ def flex_attention_forward(
     # ==================== 步骤 7: Padding Q/KV 张量 ====================
     # 目的：将 Q/KV 填充到 block_size 的倍数，与 block_mask 匹配
     # 注意：flex attention 要求输入张量长度与 block_mask 一致
+    # F.pad 参数格式：(pad_left, pad_right, pad_top, pad_bottom, ...) 从最后一个维度往前推
     if pad_q > 0 or pad_k > 0:
         # query_states: [B, H_q, Q_LEN, D] → [B, H_q, q_len_rounded, D]
+        # (0, 0, 0, pad_q) 表示：最后维度 D 不填充，倒数第二维度 Q_LEN 后面填充 pad_q 个 0
         query_states = F.pad(query_states, (0, 0, 0, pad_q), value=0.0)
         # key_states: [B, H_q, KV_LEN, D] → [B, H_q, kv_len_rounded, D]
+        # (0, 0, 0, pad_k) 表示：最后维度 D 不填充，倒数第二维度 KV_LEN 后面填充 pad_k 个 0
         key_states = F.pad(key_states, (0, 0, 0, pad_k), value=0.0)
         # value_states: [B, H_q, KV_LEN, D] → [B, H_q, kv_len_rounded, D]
         value_states = F.pad(value_states, (0, 0, 0, pad_k), value=0.0)
@@ -256,17 +259,17 @@ def flex_attention_forward(
     #   2. 根据 block_mask 跳过不需要的块 (如因果掩码的上三角)
     #   3. 对每个需要的块计算 attention: softmax(Q @ K^T / sqrt(D)) @ V
     #   4. 使用 LSE (log-sum-exp) 保证数值稳定性
-    attn_output, attention_weights = flex_attention(
+    attn_output, lse = flex_attention(
         query_states,          # [B, H_q, q_len_rounded, D]
         key_states,            # [B, H_q, kv_len_rounded, D]
         value_states,          # [B, H_q, kv_len_rounded, D]
         block_mask=block_mask,  # 块级掩码，定义哪些块需要计算
-        enable_gqa=True,       # 启用 GQA 优化 (虽然我们已经手动扩展了 KV)
+        enable_gqa=True,       # [Gemini 修改] 启用 GQA 优化 (注意：由于步骤1已手动扩展KV，此处传True已无实际节省显存的作用)
         scale=head_dim**-0.5 if scaling is None else scaling,  # 1/sqrt(D)
         return_lse=True,       # 返回 log-sum-exp，用于数值稳定
     )
     # attn_output: [B, H_q, q_len_rounded, D]
-    # attention_weights: 注意力权重 (如果 return_lse=True 则包含 LSE 信息)
+    # [Gemini 修改] lse: Log-Sum-Exp 张量 [B, H_q, q_len_rounded]，用于反向传播的数值稳定，并非注意力权重
 
     # ==================== 步骤 12: 输出后处理 ====================
     # 转回原始精度

@@ -12,10 +12,29 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+PaliGemma + Gemma Expert 关键张量速查表（默认 B=8, L_prefix≈512, L_suffix=51）
+| 名称 | 含义 | 典型形状 |
+| --- | --- | --- |
+| inputs_embeds[0] | 图像+语言前缀嵌入 | [B, L_prefix, 2048] |
+| inputs_embeds[1] | 状态+动作+时间后缀嵌入 | [B, L_suffix, 1024] |
+| attention_mask | 合并后的注意力掩码 | [B, L_total, L_total] |
+| query/key/value_states | RoPE 前后的注意力输入 | [B, L_total, H, D] |
+| att_output | 合并后的注意力输出 | [B, L_total, H*D] |
+"""
+
+import logging  # [REVISE] Added for tensor-shape diagnostics
 
 import torch
 import torch.version
-from pytest import Cache
+
+try:  # pytest 仅用于类型提示，缺失时使用简易兜底，避免运行期依赖
+    from pytest import Cache
+except ModuleNotFoundError:  # pragma: no cover - 测试环境通常已安装 pytest
+    class Cache(dict):  # [REVISE] Provide minimal stand-in when pytest is absent
+        """轻量级占位缓存，满足 forward 中的字典接口需求。"""
+
+        pass
 from torch import nn
 from transformers import (
     AutoConfig,
@@ -27,6 +46,38 @@ from transformers import (
 from transformers.models.auto import CONFIG_MAPPING
 
 from lerobot.policies.pi0.flex_attention import flex_attention_forward
+
+
+logger = logging.getLogger(__name__)  # [REVISE] Central logging handle reused across helpers
+
+
+def _shape_repr(value):
+    """中文格式化工具：把张量尺寸转换成可读列表。"""
+
+    if value is None:
+        return "None"
+    if isinstance(value, (list, tuple)):
+        shapes = []
+        for item in value:
+            if item is None:
+                shapes.append("None")
+            elif hasattr(item, "shape"):
+                shapes.append(tuple(item.shape))
+            else:
+                shapes.append(str(item))
+        return shapes
+    if hasattr(value, "shape"):
+        return tuple(value.shape)
+    return str(value)
+
+
+def _log_shapes(enabled: bool, title: str, **named_tensors):  # [REVISE] Emit human-readable tensor shapes when debugging
+    """当 debug_shapes=True 时打印关键张量尺寸。"""
+
+    if not enabled or not logger.isEnabledFor(logging.DEBUG):
+        return
+    parts = [f"{name}={_shape_repr(tensor)}" for name, tensor in named_tensors.items()]
+    logger.debug("[%s] %s", title, ", ".join(parts))
 
 
 def apply_rope(x, positions, max_wavelength=10_000):
@@ -66,11 +117,14 @@ class PaliGemmaWithExpertConfig(PretrainedConfig):
         freeze_vision_encoder: bool = True,
         train_expert_only: bool = True,
         attention_implementation: str = "eager",
+        debug_shapes: bool = False,  # [REVISE] Allow upstream configs to toggle verbose tensor logging
         **kwargs,
     ):
         self.freeze_vision_encoder = freeze_vision_encoder
         self.train_expert_only = train_expert_only
         self.attention_implementation = attention_implementation
+        # 调试标志：用于控制张量尺寸日志
+        self.debug_shapes = debug_shapes  # [REVISE] Persist toggle for downstream model usage
 
         if paligemma_config is None:
             # Default config from Pi0
@@ -181,10 +235,24 @@ class PaliGemmaWithExpertModel(PreTrainedModel):
         self.to_bfloat16_like_physical_intelligence()
         self.set_requires_grad()
 
+    def _vision_backbone(self):  # [REVISE] Normalize access to vision tower across transformers versions
+        """兼容不同 transformers 版本下 PaliGemma 视觉塔的属性命名。"""
+
+        if hasattr(self.paligemma, "vision_tower") and self.paligemma.vision_tower is not None:
+            return self.paligemma.vision_tower
+        if hasattr(self.paligemma, "model"):
+            model = self.paligemma.model
+            if hasattr(model, "vision_tower") and model.vision_tower is not None:
+                return model.vision_tower
+            if hasattr(model, "vision_model") and model.vision_model is not None:
+                return model.vision_model
+        raise AttributeError("PaliGemma 模型缺少 vision_tower/vision_model 属性，请检查 transformers 版本。")
+
     def set_requires_grad(self):
         if self.config.freeze_vision_encoder:
-            self.paligemma.vision_tower.eval()
-            for params in self.paligemma.vision_tower.parameters():
+            vision_module = self._vision_backbone()  # [REVISE] Reuse helper so attribute changes do not break finetuning
+            vision_module.eval()
+            for params in vision_module.parameters():
                 params.requires_grad = False
 
         if self.config.train_expert_only:
@@ -196,7 +264,7 @@ class PaliGemmaWithExpertModel(PreTrainedModel):
         super().train(mode)
 
         if self.config.freeze_vision_encoder:
-            self.paligemma.vision_tower.eval()
+            self._vision_backbone().eval()  # [REVISE] Ensure frozen tower stays eval-mode when training other parts
 
         if self.config.train_expert_only:
             self.paligemma.eval()
@@ -204,10 +272,11 @@ class PaliGemmaWithExpertModel(PreTrainedModel):
     def to_bfloat16_like_physical_intelligence(self):
         self.paligemma = self.paligemma.to(dtype=torch.bfloat16)
 
-        params_to_change_dtype = [
+        params_to_change_dtype = [  # [REVISE] Ensure precision alignment across both vision+language blocks
             "language_model.model.layers",
             "gemma_expert.model.layers",
             "vision_tower",
+            "vision_model",
             "multi_modal",
         ]
         for name, param in self.named_parameters():
@@ -217,12 +286,17 @@ class PaliGemmaWithExpertModel(PreTrainedModel):
     def embed_image(self, image: torch.Tensor):
         # Handle different transformers versions
         if hasattr(self.paligemma, "get_image_features"):
-            return self.paligemma.get_image_features(image)
+            emb = self.paligemma.get_image_features(image)
         else:
-            return self.paligemma.model.get_image_features(image)
+            emb = self.paligemma.model.get_image_features(image)
+
+        _log_shapes(self.config.debug_shapes, "paligemma.embed_image", image=image, image_emb=emb)  # [REVISE] Record SigLIP embedding stats for troubleshooting
+        return emb
 
     def embed_language_tokens(self, tokens: torch.Tensor):
-        return self.paligemma.language_model.embed_tokens(tokens)
+        emb = self.paligemma.language_model.embed_tokens(tokens)
+        _log_shapes(self.config.debug_shapes, "paligemma.embed_language", tokens=tokens, lang_emb=emb)  # [REVISE] Confirm token embeddings before fusion
+        return emb
 
     # TODO: break down this huge forward into modules or functions
     def forward(
@@ -243,6 +317,14 @@ class PaliGemmaWithExpertModel(PreTrainedModel):
             if hidden_states is None:
                 continue
             batch_size = hidden_states.shape[0]
+
+        _log_shapes(
+            self.config.debug_shapes,
+            "paligemma.forward.inputs",
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            inputs_embeds=inputs_embeds,
+        )  # [REVISE] Snapshot fused prefix/suffix inputs entering joint transformer
 
         # RMSNorm
         num_layers = self.paligemma.config.text_config.num_hidden_layers
@@ -277,6 +359,16 @@ class PaliGemmaWithExpertModel(PreTrainedModel):
             key_states = torch.cat(key_states, dim=1)
             value_states = torch.cat(value_states, dim=1)
 
+            if layer_idx == 0:
+                # 只在首层打印一次 QKV 尺寸，避免日志过长
+                _log_shapes(
+                    self.config.debug_shapes,
+                    "paligemma.forward.qkv",
+                    query_states=query_states,
+                    key_states=key_states,
+                    value_states=value_states,
+                )  # [REVISE] Verify first-layer projections after dtype conversion
+
             query_states = apply_rope(query_states, position_ids)
             key_states = apply_rope(key_states, position_ids)
 
@@ -304,6 +396,9 @@ class PaliGemmaWithExpertModel(PreTrainedModel):
                 attention_mask, batch_size, head_dim, query_states, key_states, value_states
             )
             att_output = att_output.to(dtype=torch.bfloat16)
+
+            if layer_idx == 0:
+                _log_shapes(self.config.debug_shapes, "paligemma.forward.att_output", att_output=att_output)  # [REVISE] Confirm fused attention activations before residuals
 
             # first part of att_output is prefix (up to sequence length, [:, 0:prefix_seq_len])
             outputs_embeds = []
@@ -349,6 +444,7 @@ class PaliGemmaWithExpertModel(PreTrainedModel):
             else:
                 outputs_embeds.append(None)
 
+        _log_shapes(self.config.debug_shapes, "paligemma.forward.outputs", outputs_embeds=outputs_embeds)  # [REVISE] Ensure normalized outputs respect dtype expectations
         return outputs_embeds, past_key_values
 
     def get_attention_interface(self):
@@ -416,5 +512,13 @@ class PaliGemmaWithExpertModel(PreTrainedModel):
         att_output = att_output.permute(0, 2, 1, 3)
         # we use -1 because sequence length can change
         att_output = att_output.reshape(batch_size, -1, num_key_value_heads * num_key_value_groups * head_dim)
+
+        _log_shapes(
+            self.config.debug_shapes,
+            "paligemma.eager_attention",
+            masked_att_weights=masked_att_weights,
+            probs=probs,
+            att_output=att_output,
+        )  # [REVISE] Trace attention numerics to debug FA fallback behavior
 
         return att_output

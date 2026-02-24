@@ -71,6 +71,9 @@ class PI0Config(PreTrainedConfig):
     use_cache: bool = True
     attention_implementation: str = "eager"  # or fa2, flex
 
+    # 调试选项：开启后会记录关键张量的尺寸，便于在 GPU0/GPU1 上排查数据流
+    debug_shapes: bool = False  # [REVISE] Introduce toggle for tensor-shape logging across PI0 stack
+
     # Finetuning settings
     freeze_vision_encoder: bool = True
     train_expert_only: bool = False

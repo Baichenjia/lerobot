@@ -48,8 +48,20 @@ Example of using the pi0 pretrained model outside LeRobot training framework:
 policy = Pi0Policy.from_pretrained("lerobot/pi0")
 ```
 
+变量维度速查（默认批大小 B=8，动作步数 T=50，动作维度 A=32）：
+| 名称 | 含义 | 典型形状 |
+| --- | --- | --- |
+| images | 相机输入，已按 SigLIP 需求归一化 | [B, C=3, H≈480, W≈640] |
+| img_masks | 每个相机的可用标记 | [B, N_img] |
+| lang_tokens / lang_masks | 语言 token 及其注意力掩码 | [B, L_tok] |
+| state | 机器人状态向量，经 `max_state_dim=32` padding | [B, 32] |
+| actions | 动作监督信号，经 `max_action_dim=32` padding | [B, T, 32] |
+| prefix_embs | PaliGemma 前缀嵌入（图像+语言） | [B, L_prefix, 2048] |
+| suffix_embs | Expert Gemma 后缀嵌入（状态+动作+时间） | [B, 1+T, 1024] |
+
 """
 
+import logging  # [REVISE] Extra import to support shape-debug logging
 import math
 from collections import deque
 
@@ -65,6 +77,38 @@ from lerobot.policies.pi0.paligemma_with_expert import (
 from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.utils.constants import ACTION, OBS_LANGUAGE_ATTENTION_MASK, OBS_LANGUAGE_TOKENS, OBS_STATE
 from lerobot.utils.utils import get_safe_dtype
+
+
+logger = logging.getLogger(__name__)  # [REVISE] Module-level logger reused across debug hooks
+
+
+def _shape_repr(value):
+    """将张量或张量列表的尺寸转成可读中文字符串。"""
+
+    if value is None:
+        return "None"
+    if isinstance(value, (list, tuple)):
+        formatted = []
+        for item in value:
+            if item is None:
+                formatted.append("None")
+            elif hasattr(item, "shape"):
+                formatted.append(tuple(item.shape))
+            else:
+                formatted.append(str(item))
+        return formatted
+    if hasattr(value, "shape"):
+        return tuple(value.shape)
+    return str(value)
+
+
+def _log_shapes(enabled: bool, title: str, **named_tensors):  # [REVISE] Shared utility to emit annotated tensor sizes
+    """在 debug_shapes 开启时打印关键张量尺寸。"""
+
+    if not enabled or not logger.isEnabledFor(logging.DEBUG):
+        return
+    summaries = [f"{name}={_shape_repr(tensor)}" for name, tensor in named_tensors.items()]
+    logger.debug("[%s] %s", title, ", ".join(summaries))
 
 
 def create_sinusoidal_pos_embedding(
@@ -307,9 +351,23 @@ class PI0Policy(PreTrainedPolicy):
         actions = self.prepare_action(batch)
         actions_is_pad = batch.get("action_is_pad")
 
+        # 只有在 debug 模式下才打印关键输入的尺寸，便于确认 padding 是否正确
+        _log_shapes(
+            self.config.debug_shapes,
+            "pi0_policy.forward.inputs",
+            images=images,
+            img_masks=img_masks,
+            state=state,
+            lang_tokens=lang_tokens,
+            lang_masks=lang_masks,
+            actions=actions,
+        )  # [REVISE] Capture critical PI0Policy inputs when diagnostics are enabled
+
         loss_dict = {}
         losses = self.model.forward(images, img_masks, lang_tokens, lang_masks, state, actions, noise, time)
         loss_dict["losses_after_forward"] = losses.clone()
+
+        _log_shapes(self.config.debug_shapes, "pi0_policy.forward.loss_tensor", losses=losses)  # [REVISE] Surface raw per-dimension losses before masking/padding fixes
 
         if actions_is_pad is not None:
             in_episode_bound = ~actions_is_pad
@@ -368,6 +426,8 @@ class PI0Policy(PreTrainedPolicy):
             images.append(img)
             img_masks.append(mask)
 
+        # 调试阶段记录每路相机的尺寸和遮罩长度，快速定位缺失 camera
+        _log_shapes(self.config.debug_shapes, "pi0_policy.prepare_images", images=images, img_masks=img_masks)  # [REVISE] Log per-camera tensors to catch padding/empty-camera issues
         return images, img_masks
 
     def _pi_aloha_decode_state(self, state):
@@ -400,11 +460,15 @@ class PI0Policy(PreTrainedPolicy):
     def prepare_state(self, batch):
         """Pad state"""
         state = pad_vector(batch[OBS_STATE], self.config.max_state_dim)
+        # 记录状态向量在 padding 后的最终尺寸，确保与 proj 层输入一致
+        _log_shapes(self.config.debug_shapes, "pi0_policy.prepare_state", state=state)  # [REVISE] Verify padded state width before projection
         return state
 
     def prepare_action(self, batch):
         """Pad action"""
         actions = pad_vector(batch[ACTION], self.config.max_action_dim)
+        # 记录动作 supervision 的尺寸，方便核对 chunk_size/步数
+        _log_shapes(self.config.debug_shapes, "pi0_policy.prepare_action", actions=actions)  # [REVISE] Ensure supervised actions align with configured dims
         return actions
 
 
@@ -443,6 +507,7 @@ class PI0FlowMatching(nn.Module):
             freeze_vision_encoder=self.config.freeze_vision_encoder,
             train_expert_only=self.config.train_expert_only,
             attention_implementation=self.config.attention_implementation,
+            debug_shapes=self.config.debug_shapes,  # [REVISE] Forward debug toggle into PaliGemma/Gemma wrapper
         )
         self.paligemma_with_expert = PaliGemmaWithExpertModel(paligemma_with_export_config)
 
@@ -526,6 +591,14 @@ class PI0FlowMatching(nn.Module):
         att_masks = torch.tensor(att_masks, dtype=torch.bool, device=pad_masks.device)
         att_masks = att_masks[None, :].expand(bsize, len(att_masks))
 
+        # 记录前缀嵌入长度与维度，确保 SigLIP 与语言 token 拼接无误
+        _log_shapes(
+            self.config.debug_shapes,
+            "pi0_flow.embed_prefix",
+            prefix_embs=embs,
+            prefix_pad_masks=pad_masks,
+            prefix_att_masks=att_masks,
+        )  # [REVISE] Inspect concatenated vision-language prefix before transformer
         return embs, pad_masks, att_masks
 
     def embed_suffix(self, state, noisy_actions, timestep):
@@ -579,6 +652,14 @@ class PI0FlowMatching(nn.Module):
         att_masks = torch.tensor(att_masks, dtype=embs.dtype, device=embs.device)
         att_masks = att_masks[None, :].expand(bsize, len(att_masks))
 
+        # 记录后缀嵌入尺寸，便于确认状态 token + T 个动作 token 的对齐情况
+        _log_shapes(
+            self.config.debug_shapes,
+            "pi0_flow.embed_suffix",
+            suffix_embs=embs,
+            suffix_pad_masks=pad_masks,
+            suffix_att_masks=att_masks,
+        )  # [REVISE] Validate state/action token packing for Gemma suffix stream
         return embs, pad_masks, att_masks
 
     def forward(
@@ -595,6 +676,14 @@ class PI0FlowMatching(nn.Module):
         x_t = time_expanded * noise + (1 - time_expanded) * actions
         u_t = noise - actions
 
+        _log_shapes(
+            self.config.debug_shapes,
+            "pi0_flow.forward.xt_ut",
+            time=time,
+            x_t=x_t,
+            u_t=u_t,
+        )  # [REVISE] Trace intermediate noisy/velocity tensors driving flow matching
+
         prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(
             images, img_masks, lang_tokens, lang_masks
         )
@@ -605,6 +694,15 @@ class PI0FlowMatching(nn.Module):
 
         att_2d_masks = make_att_2d_masks(pad_masks, att_masks)
         position_ids = torch.cumsum(pad_masks, dim=1) - 1
+
+        _log_shapes(
+            self.config.debug_shapes,
+            "pi0_flow.forward.attention_inputs",
+            pad_masks=pad_masks,
+            att_masks=att_masks,
+            att_2d_masks=att_2d_masks,
+            position_ids=position_ids,
+        )  # [REVISE] Confirm stitched attention masks before invoking backbone
 
         (_, suffix_out), _ = self.paligemma_with_expert.forward(
             attention_mask=att_2d_masks,
@@ -619,6 +717,7 @@ class PI0FlowMatching(nn.Module):
         suffix_out = suffix_out.to(dtype=torch.float32)
         v_t = self.action_out_proj(suffix_out)
 
+        _log_shapes(self.config.debug_shapes, "pi0_flow.forward.outputs", suffix_out=suffix_out, v_t=v_t)  # [REVISE] Observe projected velocities to diagnose flow loss
         losses = F.mse_loss(u_t, v_t, reduction="none")
         return losses
 
@@ -636,6 +735,14 @@ class PI0FlowMatching(nn.Module):
         )
         prefix_att_2d_masks = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
         prefix_position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
+
+        _log_shapes(
+            self.config.debug_shapes,
+            "pi0_flow.sample_actions.prefix",
+            prefix_embs=prefix_embs,
+            prefix_pad_masks=prefix_pad_masks,
+            prefix_att_2d_masks=prefix_att_2d_masks,
+        )  # [REVISE] Snapshot cached prefix tensors before autoregressive decode
 
         # Compute image and language key value cache
         _, past_key_values = self.paligemma_with_expert.forward(
@@ -665,6 +772,8 @@ class PI0FlowMatching(nn.Module):
             # Euler step
             x_t += dt * v_t
             time += dt
+
+        _log_shapes(self.config.debug_shapes, "pi0_flow.sample_actions.final", actions=x_t)  # [REVISE] Verify final action chunk after Euler integration
         return x_t
 
     def denoise_step(
@@ -690,6 +799,15 @@ class PI0FlowMatching(nn.Module):
         prefix_offsets = torch.sum(prefix_pad_masks, dim=-1)[:, None]
         position_ids = prefix_offsets + torch.cumsum(suffix_pad_masks, dim=1) - 1
 
+        _log_shapes(
+            self.config.debug_shapes,
+            "pi0_flow.denoise_step.inputs",
+            suffix_embs=suffix_embs,
+            suffix_pad_masks=suffix_pad_masks,
+            full_att_2d_masks=full_att_2d_masks,
+            position_ids=position_ids,
+        )  # [REVISE] Confirm per-step suffix prep before incremental KV reuse
+
         outputs_embeds, _ = self.paligemma_with_expert.forward(
             attention_mask=full_att_2d_masks,
             position_ids=position_ids,
@@ -702,4 +820,6 @@ class PI0FlowMatching(nn.Module):
         suffix_out = suffix_out[:, -self.config.n_action_steps :]
         suffix_out = suffix_out.to(dtype=torch.float32)
         v_t = self.action_out_proj(suffix_out)
+
+        _log_shapes(self.config.debug_shapes, "pi0_flow.denoise_step.outputs", suffix_out=suffix_out, v_t=v_t)  # [REVISE] Track denoiser predictions powering sampler loop
         return v_t
